@@ -1,45 +1,67 @@
-#!/usr/bin/env python3
-"""One-Line Roast: The Gadget You Use Every Day (v3, home printer angle).
+"""Single-entry publisher for the printer roast.
 
-Writes one roast line to /output/entry.txt. Standard library only.
+Concept: the printer disconnects the second you ask it to print, only to
+turn around and hand you a flawless alignment page -- its tidy way of
+saying the device is blameless and the operator is the bug.
+
+Kept deliberately small: one canonical quip, a guard on its shape, and a
+crash-safe write to /output/entry.txt (staging file, then rename).
 """
+
+from __future__ import annotations
+
 import os
 import tempfile
 
-JOKE = (
-    "My home printer goes offline the instant I hit print, then prints a "
-    "flawless test page to prove the problem is me."
-)
+JOKE = "My home printer goes offline the instant I hit print, then prints a flawless test page to prove the problem is me."
 
-ENTRY_PATH = "/output/entry.txt"
+OUTPUT_DIR = "/output"
+OUTPUT_NAME = "entry.txt"
+LOW_BOUND = 1
+HIGH_BOUND = 200
 
 
-def validate(text: str) -> str:
-    if not text.strip():
-        raise ValueError("entry is blank")
-    if not (1 <= len(text) <= 200):
-        raise ValueError("entry must be 1-200 characters, got %d" % len(text))
-    return text
+def _check_entry(entry: str) -> str:
+    """Confirm the entry is a usable string and return it unchanged."""
+    if not isinstance(entry, str) or not entry.strip():
+        raise ValueError("entry must be a non-blank string")
+    size = len(entry)
+    if size < LOW_BOUND or size > HIGH_BOUND:
+        raise ValueError(
+            f"entry length {size} outside allowed range "
+            f"{LOW_BOUND}..{HIGH_BOUND}"
+        )
+    return entry
+
+
+def _ensure_output_dir(directory: str) -> None:
+    """Create *directory* if needed and make it traversable."""
+    os.makedirs(directory, exist_ok=True)
+    os.chmod(directory, 0o755)
+
+
+def _commit_atomically(destination: str, payload: str) -> None:
+    """Stage *payload* next to *destination*, then swap it into place."""
+    directory = os.path.dirname(destination) or "."
+    fd, staged = tempfile.mkstemp(dir=directory, prefix=".entry-", suffix=".part")
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8") as writer:
+            writer.write(payload)
+        os.chmod(staged, 0o644)
+        os.replace(staged, destination)
+        os.chmod(destination, 0o644)
+    except BaseException:
+        if os.path.exists(staged):
+            os.unlink(staged)
+        raise
 
 
 def main() -> None:
-    line = validate(JOKE)
-    os.makedirs("/output", exist_ok=True)
-    # The collector reads /output as another user: keep the folder traversable.
-    os.chmod("/output", 0o755)
-    # Write to a temp file in /output, make it world-readable, then swap it in
-    # atomically so a reader never sees a partial entry.
-    fd, tmp = tempfile.mkstemp(dir="/output", prefix=".entry-", suffix=".tmp")
-    try:
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(line)
-        os.chmod(tmp, 0o644)
-        os.replace(tmp, ENTRY_PATH)
-    except BaseException:
-        if os.path.exists(tmp):
-            os.unlink(tmp)
-        raise
-    os.chmod(ENTRY_PATH, 0o644)
+    payload = _check_entry(JOKE)
+    _ensure_output_dir(OUTPUT_DIR)
+    target = os.path.join(OUTPUT_DIR, OUTPUT_NAME)
+    _commit_atomically(target, payload)
+    print(f"stored {len(payload)} chars in {target}")
 
 
 if __name__ == "__main__":
